@@ -7,6 +7,3 @@ This repo is a source repo for Chronic Wound research. This research is intended
 
 # How to run the program
 You can run the program by typing "python main.py". To configure input dataset, see the configuration of app.conf following specification of Python ConfigParser (similar to Windows.ini).  
-
-# License
-Gnu GPL Ver 2. 
