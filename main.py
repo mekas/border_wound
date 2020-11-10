@@ -5,8 +5,13 @@ from lib import *
 conf_path = "app.conf"
 config = ConfigParser()
 config.read(conf_path)
-section='TEST'
+section = 'TEST'
 dirpath = config[section]['Dir']
 df = pd.read_csv(config[section]['Input'])
-# print(df)
-run_active_contour(dirpath, df)
+PARS = 'PARAMETER'
+alpha = float(config[PARS]['alpha'])
+beta = float(config[PARS]['beta'])
+gamma = float(config[PARS]['gamma'])
+blur_width = int(config[PARS]['gaussian_kernel_width'])
+
+run_active_contour(dirpath, df, alpha, beta, gamma, blur_width)
