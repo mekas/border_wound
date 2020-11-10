@@ -1,12 +1,12 @@
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-import os
 from util import *
-from skimage.filters import gaussian
 from skimage.segmentation import active_contour
 from matplotlib.pyplot import imread
 from skimage.color import rgb2gray, rgba2rgb
+from skimage.filters import gaussian, threshold_otsu
+from skimage.morphology import closing, square
+from skimage.feature import canny
 
 
 def define_circle(center, radius, density=400):
@@ -24,14 +24,12 @@ def define_circle(center, radius, density=400):
     return points
 
 
-def plot_snake(path, img, start_snake, snake):
+def plot_thresholding(path, img, suffix_path):
     dpi = matplotlib.rcParams['figure.dpi']
     figsize = img.shape[1] / float(dpi), img.shape[0] / float(dpi)
     fig = plt.figure(frameon=False, figsize=figsize)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.imshow(img, cmap=plt.cm.gray)
-    ax.plot(start_snake[:, 1], start_snake[:, 0], '--r', lw=3)
-    ax.plot(snake[:, 1], snake[:, 0], '-b', lw=3)
 
     fig.patch.set_visible(False)
     ax.axis('off')
@@ -40,11 +38,49 @@ def plot_snake(path, img, start_snake, snake):
     ax.axis([0, img.shape[1], img.shape[0], 0])
 
     filename, ext = get_filename_extension(path)
-    plt.savefig(filename + "_res" + ext)
+    plt.savefig(filename + suffix_path + ext)
+
+
+def plot_snake(path, img, start_snake, snake, edges, suffix_path):
+    """
+    This function draw the snake path in overlay mode with input image,
+    drawn circle and ground truth
+    :param path: Image path
+    :param img: Image matrix
+    :param start_snake: Drawn circle
+    :param snake: Result of snake operation
+    :param suffix_path: suffix filename to append as output filename
+    :return:
+    """
+
+    dpi = matplotlib.rcParams['figure.dpi']
+    figsize = img.shape[1] / float(dpi), img.shape[0] / float(dpi)
+    fig = plt.figure(frameon=False, figsize=figsize)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(img, cmap=plt.cm.gray)
+    ax.plot(start_snake[:, 1], start_snake[:, 0], '--r', lw=3)
+    ax.plot(snake[:, 1], snake[:, 0], '-b', lw=3)
+    # with edge map we can't plot with plot, since the indexes are unordered
+    # (not clockwise rotation)
+    ax.scatter(edges[:, 1], edges[:, 0], s=0.5, facecolor='green')
+
+    fig.patch.set_visible(False)
+    ax.axis('off')
+    # comment this line if you want to show axes coordinates
+    ax.set_xticks([]), ax.set_yticks([])
+    ax.axis([0, img.shape[1], img.shape[0], 0])
+
+    filename, ext = get_filename_extension(path)
+    plt.savefig(filename + suffix_path + ext)
     # plt.show()
 
 
-def run_active_contour(dirpath, df, alpha, beta, gamma, blur_width):
+def thresholding(img):
+    tres = threshold_otsu(img)
+    return closing(img > tres, square(3))
+
+
+def run_active_contour(dirpath, df, alpha, beta, gamma, blur_width, density):
     """
     :param dirpath: dir to scan for input images
     :param df: dataframe containing list of file to be processed inside dirpath
@@ -53,34 +89,48 @@ def run_active_contour(dirpath, df, alpha, beta, gamma, blur_width):
     :param gamma: Explicit time stepping parameter. Higher values makes 
     converge faster at the expense of precision.
     :param blur_width: Gaussian smoothing parameter. Must be odd.
+    :param density: How many sample wanted for the snake
     :return: None, this function store processing results as images in directory
     """"img""img"
     for index, row in df.iterrows():
         path = os.path.join(dirpath, row['path'])
-        img = imread(path)
-        print(img.shape)
-        if len(img.shape) > 2:
-            if img.shape[2] > 3:
-                img = rgb2gray(rgba2rgb(img))
-            else:
-                img = rgb2gray(img)
+        try:
+            img = imread(path)
+            gt_path = get_ground_truth_path(path)
+            gt_img = imread(gt_path)
+            edge_map = canny(rgb2gray(rgba2rgb(gt_img)))
+            edge_locations = np.where(edge_map == True)
+            edge_locations = merge_coordinates(edge_locations[0],
+                                               edge_locations[1])
+            if len(img.shape) > 2:
+                if img.shape[2] > 3:
+                    img = rgb2gray(rgba2rgb(img))
+                else:
+                    img = rgb2gray(img)
 
-        center = (row['x_center'], row['y_center'])
-        radius = row['radius']
+            # smooth the image with gaussian blur of window range
+            sm_image = gaussian(img, blur_width)
+            # apply Otsu thresholding to the smoothed image
+            bw_image = thresholding(sm_image)
 
-        points = define_circle(center, radius, 400)
+            center = (row['x_center'], row['y_center'])
+            radius = row['radius']
 
-        blur_width = blur_width
-        # smooth the image with gaussian blur of window range
-        sm_image = gaussian(img, blur_width)
+            points = define_circle(center, radius, density)
 
-        max_iteration_def = 5000
-        gamma_def = 0.01
-        max_iter = max_iteration_def * gamma_def / gamma
+            blur_width = blur_width
 
-        # run basic snake on smoothed image
-        snake = active_contour(sm_image,
-                               points, alpha=alpha, beta=beta, gamma=gamma, boundary_condition='periodic',
-                               max_iterations=max_iter, w_edge=1, coordinates='rc')
+            max_iteration_def = 10000
+            gamma_def = 0.01
+            max_iter = max_iteration_def * gamma_def / gamma
 
-        plot_snake(path, img, points, snake)
+            # run basic snake on smoothed image
+            snake = active_contour(bw_image, points, alpha=alpha, beta=beta, gamma=gamma,
+                                   max_iterations=max_iter,
+                                   coordinates='rc')
+
+            # dump the processed image to the input directory with extra suffix
+            plot_snake(path, img, points, snake, edge_locations, '_res')
+            plot_thresholding(path, bw_image, '_thres')
+        except IOError:
+            print("Can't read either input or ground truth image, skip " + path)
